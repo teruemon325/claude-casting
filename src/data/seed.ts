@@ -4,9 +4,9 @@ const T = '2026-01-01T00:00:00.000Z';
 
 function entry(
   id: string,
-  data: Omit<KnowHow, 'id' | 'favorite' | 'createdAt' | 'updatedAt'>,
+  data: Omit<KnowHow, 'id' | 'images' | 'favorite' | 'createdAt' | 'updatedAt'>,
 ): KnowHow {
-  return { id, ...data, favorite: false, createdAt: T, updatedAt: T };
+  return { id, ...data, images: [], favorite: false, createdAt: T, updatedAt: T };
 }
 
 /**

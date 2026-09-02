@@ -1,6 +1,7 @@
 import type { KnowHow } from '../types';
 import { CategoryBadge } from './CategoryBadge';
 import { Modal } from './Modal';
+import { ImageGallery } from './ImageGallery';
 
 interface Props {
   entry: KnowHow;
@@ -40,6 +41,7 @@ export function EntryDetail({ entry, onClose, onEdit, onDelete, onToggleFavorite
       <Section label="現象・課題" text={entry.problem} />
       <Section label="原因" text={entry.cause} />
       <Section label="対策・ノウハウ" text={entry.solution} />
+      <ImageGallery images={entry.images} />
       <Section label="備考" text={entry.notes} />
       <p className="muted small">最終更新: {formatDate(entry.updatedAt)}</p>
       <div className="detail-actions">

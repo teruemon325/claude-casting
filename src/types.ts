@@ -16,6 +16,13 @@ export function isCategory(value: unknown): value is Category {
   return typeof value === 'string' && (CATEGORIES as readonly string[]).includes(value);
 }
 
+/** 添付画像のメタデータ。画像本体は imageStore（IndexedDB）に id で保存する */
+export interface KnowHowImage {
+  id: string;
+  name: string;
+  caption: string;
+}
+
 /** ノウハウ1件分のデータ */
 export interface KnowHow {
   id: string;
@@ -32,6 +39,7 @@ export interface KnowHow {
   solution: string;
   /** 備考（参考値・注意点など） */
   notes: string;
+  images: KnowHowImage[];
   favorite: boolean;
   createdAt: string;
   updatedAt: string;
@@ -40,7 +48,7 @@ export interface KnowHow {
 /** フォームから受け取る入力値 */
 export type KnowHowInput = Pick<
   KnowHow,
-  'title' | 'category' | 'tags' | 'summary' | 'problem' | 'cause' | 'solution' | 'notes'
+  'title' | 'category' | 'tags' | 'summary' | 'problem' | 'cause' | 'solution' | 'notes' | 'images'
 >;
 
 export const EMPTY_INPUT: KnowHowInput = {
@@ -52,4 +60,5 @@ export const EMPTY_INPUT: KnowHowInput = {
   cause: '',
   solution: '',
   notes: '',
+  images: [],
 };

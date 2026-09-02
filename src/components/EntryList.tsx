@@ -1,5 +1,6 @@
 import type { KnowHow } from '../types';
 import { CategoryBadge } from './CategoryBadge';
+import { ImageThumb } from './ImageThumb';
 
 interface Props {
   entries: readonly KnowHow[];
@@ -40,6 +41,14 @@ export function EntryList({ entries, total, onSelect, onToggleFavorite, onTagCli
                 {entry.title}
               </button>
               <p className="card-summary">{entry.summary}</p>
+              {entry.images.length > 0 && (
+                <div className="card-thumbs" aria-label={`画像 ${entry.images.length} 枚`}>
+                  {entry.images.slice(0, 3).map((image) => (
+                    <ImageThumb key={image.id} image={image} size="small" onClick={() => onSelect(entry.id)} />
+                  ))}
+                  {entry.images.length > 3 && <span className="card-thumbs-more">+{entry.images.length - 3}</span>}
+                </div>
+              )}
               {entry.tags.length > 0 && (
                 <div className="card-tags">
                   {entry.tags.map((tag) => (

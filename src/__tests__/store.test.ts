@@ -118,12 +118,13 @@ describe('exportJson / importJson / mergeEntries', () => {
   it('exports and re-imports the same entries', () => {
     const entries = [createEntry(sample), createEntry({ ...sample, title: 'B' })];
     const imported = importJson(exportJson(entries));
-    expect(imported).toEqual(entries);
+    expect(imported.entries).toEqual(entries);
+    expect(imported.imageData).toEqual({});
   });
 
   it('accepts a bare array', () => {
     const entries = [createEntry(sample)];
-    expect(importJson(JSON.stringify(entries))).toEqual(entries);
+    expect(importJson(JSON.stringify(entries)).entries).toEqual(entries);
   });
 
   it('throws on invalid input', () => {

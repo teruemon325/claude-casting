@@ -2,16 +2,21 @@ import { useState, type FormEvent } from 'react';
 import { CATEGORIES, type KnowHowInput } from '../types';
 import { parseTagText, validateInput } from '../store';
 import { Modal } from './Modal';
+import { ImagePicker, type FormImage } from './ImagePicker';
+
+/** 新規追加分の画像本体。id → Blob */
+export type NewImageBlobs = Map<string, Blob>;
 
 interface Props {
   title: string;
   initial: KnowHowInput;
   onCancel: () => void;
-  onSubmit: (input: KnowHowInput) => void;
+  onSubmit: (input: KnowHowInput, newBlobs: NewImageBlobs) => void;
 }
 
 export function EntryForm({ title, initial, onCancel, onSubmit }: Props) {
   const [values, setValues] = useState<KnowHowInput>(initial);
+  const [images, setImages] = useState<FormImage[]>(initial.images);
   const [tagText, setTagText] = useState(initial.tags.join(', '));
   const [errors, setErrors] = useState<string[]>([]);
 
@@ -20,13 +25,19 @@ export function EntryForm({ title, initial, onCancel, onSubmit }: Props) {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const input: KnowHowInput = { ...values, tags: parseTagText(tagText) };
+    const newBlobs: NewImageBlobs = new Map();
+    for (const image of images) if (image.blob) newBlobs.set(image.id, image.blob);
+    const input: KnowHowInput = {
+      ...values,
+      tags: parseTagText(tagText),
+      images: images.map(({ id, name, caption }) => ({ id, name, caption })),
+    };
     const found = validateInput(input);
     if (found.length > 0) {
       setErrors(found);
       return;
     }
-    onSubmit(input);
+    onSubmit(input, newBlobs);
   };
 
   return (
@@ -79,6 +90,10 @@ export function EntryForm({ title, initial, onCancel, onSubmit }: Props) {
           備考
           <textarea rows={2} value={values.notes} onChange={(e) => set('notes', e.target.value)} />
         </label>
+        <div className="form-field">
+          <span className="form-field-label">画像（写真・スケッチ・図）</span>
+          <ImagePicker images={images} onChange={setImages} />
+        </div>
         <div className="form-actions">
           <button type="button" className="btn" onClick={onCancel}>
             キャンセル

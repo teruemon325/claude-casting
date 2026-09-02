@@ -8,40 +8,59 @@ import {
   importJson,
   loadEntries,
   mergeEntries,
+  referencedImageIds,
   saveEntries,
   toggleFavorite,
   updateEntry,
+  type ImageDataMap,
 } from './store';
+import { blobToDataUrl, createImageStore, dataUrlToBlob, type ImageStore } from './imageStore';
 import { EMPTY_INPUT, type KnowHow, type KnowHowInput } from './types';
 import { EntryDetail } from './components/EntryDetail';
-import { EntryForm } from './components/EntryForm';
+import { EntryForm, type NewImageBlobs } from './components/EntryForm';
 import { EntryList } from './components/EntryList';
 import { Header } from './components/Header';
+import { ImageStoreContext } from './components/ImageStoreContext';
 import { Sidebar } from './components/Sidebar';
 
 type FormState = { mode: 'new' } | { mode: 'edit'; id: string } | null;
 
 function pickInput(entry: KnowHow): KnowHowInput {
-  const { title, category, tags, summary, problem, cause, solution, notes } = entry;
-  return { title, category, tags, summary, problem, cause, solution, notes };
+  const { title, category, tags, summary, problem, cause, solution, notes, images } = entry;
+  return { title, category, tags, summary, problem, cause, solution, notes, images };
+}
+
+/** どのノウハウからも参照されなくなった画像をストアから消す */
+async function pruneOrphanImages(store: ImageStore, entries: readonly KnowHow[]): Promise<void> {
+  const referenced = referencedImageIds(entries);
+  const keys = await store.keys();
+  await Promise.all(keys.filter((key) => !referenced.has(key)).map((key) => store.delete(key)));
 }
 
 export default function App() {
+  const imageStore = useMemo(() => createImageStore(), []);
   const [entries, setEntries] = useState<KnowHow[]>(() => loadEntries(window.localStorage, SEED_ENTRIES));
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     saveEntries(window.localStorage, entries);
   }, [entries]);
 
+  // 起動時に一度だけ、参照されていない画像を掃除する
+  useEffect(() => {
+    void pruneOrphanImages(imageStore, entries).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageStore]);
+
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), 3000);
+    const timer = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -52,54 +71,85 @@ export default function App() {
   const closeForm = useCallback(() => setForm(null), []);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
-  const handleSubmit = (input: KnowHowInput) => {
-    if (form?.mode === 'edit') {
-      setEntries((prev) => updateEntry(prev, form.id, input));
-      setToast('ノウハウを更新しました。');
-    } else {
-      const entry = createEntry(input);
-      setEntries((prev) => [entry, ...prev]);
-      setToast('ノウハウを追加しました。');
+  const handleSubmit = async (input: KnowHowInput, newBlobs: NewImageBlobs) => {
+    setBusy(true);
+    try {
+      await Promise.all([...newBlobs].map(([id, blob]) => imageStore.put(id, blob)));
+      const keep = new Set(input.images.map((img) => img.id));
+      if (form?.mode === 'edit') {
+        const before = entries.find((e) => e.id === form.id);
+        const removed = before ? before.images.filter((img) => !keep.has(img.id)) : [];
+        setEntries((prev) => updateEntry(prev, form.id, input));
+        await Promise.all(removed.map((img) => imageStore.delete(img.id)));
+        setToast('ノウハウを更新しました。');
+      } else {
+        const entry = createEntry(input);
+        setEntries((prev) => [entry, ...prev]);
+        setToast('ノウハウを追加しました。');
+      }
+      setForm(null);
+    } catch (err) {
+      setToast(`保存に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
     }
-    setForm(null);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     const target = entries.find((e) => e.id === id);
     if (!target) return;
     if (!window.confirm(`「${target.title}」を削除しますか？`)) return;
     setEntries((prev) => deleteEntry(prev, id));
     setSelectedId(null);
+    await Promise.all(target.images.map((img) => imageStore.delete(img.id))).catch(() => undefined);
     setToast('ノウハウを削除しました。');
   };
 
-  const handleExport = () => {
-    const blob = new Blob([exportJson(entries)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `casting-mold-knowhow-${stamp}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleExport = async () => {
+    setBusy(true);
+    try {
+      const imageData: ImageDataMap = {};
+      for (const id of referencedImageIds(entries)) {
+        const blob = await imageStore.get(id);
+        if (blob) imageData[id] = await blobToDataUrl(blob);
+      }
+      const blob = new Blob([exportJson(entries, imageData)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `casting-mold-knowhow-${stamp}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setToast(`エクスポートに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleImportFile = async (file: File | undefined) => {
     if (!file) return;
+    setBusy(true);
     try {
-      const imported = importJson(await file.text());
+      const { entries: imported, imageData } = importJson(await file.text());
+      await Promise.all(Object.entries(imageData).map(([id, dataUrl]) => imageStore.put(id, dataUrlToBlob(dataUrl))));
       setEntries((prev) => mergeEntries(prev, imported));
-      setToast(`${imported.length} 件を取り込みました。`);
+      const imageCount = Object.keys(imageData).length;
+      setToast(`${imported.length} 件を取り込みました${imageCount > 0 ? `（画像 ${imageCount} 枚）` : ''}。`);
     } catch (err) {
       setToast(`インポートに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handleReset = () => {
-    if (!window.confirm('登録したノウハウをすべて消して初期データに戻します。よろしいですか？')) return;
+  const handleReset = async () => {
+    if (!window.confirm('登録したノウハウと画像をすべて消して初期データに戻します。よろしいですか？')) return;
     setEntries([...SEED_ENTRIES]);
     setFilter(DEFAULT_FILTER);
     setSelectedId(null);
+    await imageStore.clear().catch(() => undefined);
     setToast('初期データに戻しました。');
   };
 
@@ -108,63 +158,65 @@ export default function App() {
   };
 
   return (
-    <div className="app">
-      <Header
-        query={filter.query}
-        onQueryChange={(query) => setFilter((prev) => ({ ...prev, query }))}
-        onNew={() => setForm({ mode: 'new' })}
-        onExport={handleExport}
-        onImport={() => fileInputRef.current?.click()}
-        onReset={handleReset}
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
-      />
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="application/json,.json"
-        hidden
-        onChange={(e) => {
-          void handleImportFile(e.target.files?.[0]);
-          e.target.value = '';
-        }}
-      />
-      <div className="layout">
-        {sidebarOpen && <div className="sidebar-backdrop" onClick={closeSidebar} />}
-        <Sidebar entries={entries} filter={filter} onChange={setFilter} open={sidebarOpen} onClose={closeSidebar} />
-        <EntryList
-          entries={visible}
-          total={entries.length}
-          onSelect={setSelectedId}
-          onToggleFavorite={(id) => setEntries((prev) => toggleFavorite(prev, id))}
-          onTagClick={addTagFilter}
+    <ImageStoreContext.Provider value={imageStore}>
+      <div className="app" aria-busy={busy}>
+        <Header
+          query={filter.query}
+          onQueryChange={(query) => setFilter((prev) => ({ ...prev, query }))}
+          onNew={() => setForm({ mode: 'new' })}
+          onExport={() => void handleExport()}
+          onImport={() => fileInputRef.current?.click()}
+          onReset={() => void handleReset()}
+          onToggleSidebar={() => setSidebarOpen((v) => !v)}
         />
-      </div>
-
-      {selected && !form && (
-        <EntryDetail
-          entry={selected}
-          onClose={closeDetail}
-          onEdit={() => setForm({ mode: 'edit', id: selected.id })}
-          onDelete={() => handleDelete(selected.id)}
-          onToggleFavorite={() => setEntries((prev) => toggleFavorite(prev, selected.id))}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(e) => {
+            void handleImportFile(e.target.files?.[0]);
+            e.target.value = '';
+          }}
         />
-      )}
-
-      {form && (
-        <EntryForm
-          key={form.mode === 'edit' ? form.id : 'new'}
-          title={form.mode === 'edit' ? 'ノウハウを編集' : 'ノウハウを追加'}
-          initial={form.mode === 'edit' ? pickInput(entries.find((e) => e.id === form.id)!) : EMPTY_INPUT}
-          onCancel={closeForm}
-          onSubmit={handleSubmit}
-        />
-      )}
-
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
+        <div className="layout">
+          {sidebarOpen && <div className="sidebar-backdrop" onClick={closeSidebar} />}
+          <Sidebar entries={entries} filter={filter} onChange={setFilter} open={sidebarOpen} onClose={closeSidebar} />
+          <EntryList
+            entries={visible}
+            total={entries.length}
+            onSelect={setSelectedId}
+            onToggleFavorite={(id) => setEntries((prev) => toggleFavorite(prev, id))}
+            onTagClick={addTagFilter}
+          />
         </div>
-      )}
-    </div>
+
+        {selected && !form && (
+          <EntryDetail
+            entry={selected}
+            onClose={closeDetail}
+            onEdit={() => setForm({ mode: 'edit', id: selected.id })}
+            onDelete={() => void handleDelete(selected.id)}
+            onToggleFavorite={() => setEntries((prev) => toggleFavorite(prev, selected.id))}
+          />
+        )}
+
+        {form && (
+          <EntryForm
+            key={form.mode === 'edit' ? form.id : 'new'}
+            title={form.mode === 'edit' ? 'ノウハウを編集' : 'ノウハウを追加'}
+            initial={form.mode === 'edit' ? pickInput(entries.find((e) => e.id === form.id)!) : EMPTY_INPUT}
+            onCancel={closeForm}
+            onSubmit={(input, blobs) => void handleSubmit(input, blobs)}
+          />
+        )}
+
+        {toast && (
+          <div className="toast" role="status">
+            {toast}
+          </div>
+        )}
+      </div>
+    </ImageStoreContext.Provider>
   );
 }

@@ -1,4 +1,4 @@
-import { isCategory, type KnowHow, type KnowHowInput } from './types';
+import { isCategory, type KnowHow, type KnowHowImage, type KnowHowInput } from './types';
 
 export const STORAGE_KEY = 'casting-mold-knowhow:v1';
 
@@ -33,6 +33,17 @@ export function parseTagText(text: string): string[] {
   return normalizeTags(text.split(/[,、\s]+/));
 }
 
+function normalizeImages(images: readonly KnowHowImage[]): KnowHowImage[] {
+  const seen = new Set<string>();
+  const result: KnowHowImage[] = [];
+  for (const image of images) {
+    if (!image.id || seen.has(image.id)) continue;
+    seen.add(image.id);
+    result.push({ id: image.id, name: image.name.trim(), caption: image.caption.trim() });
+  }
+  return result;
+}
+
 function sanitizeInput(input: KnowHowInput): KnowHowInput {
   return {
     title: input.title.trim(),
@@ -43,6 +54,7 @@ function sanitizeInput(input: KnowHowInput): KnowHowInput {
     cause: input.cause.trim(),
     solution: input.solution.trim(),
     notes: input.notes.trim(),
+    images: normalizeImages(input.images),
   };
 }
 
@@ -84,8 +96,28 @@ export function toggleFavorite(entries: readonly KnowHow[], id: string): KnowHow
   return entries.map((entry) => (entry.id === id ? { ...entry, favorite: !entry.favorite } : entry));
 }
 
+/** すべてのノウハウが参照している画像 id の集合 */
+export function referencedImageIds(entries: readonly KnowHow[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) for (const image of entry.images) ids.add(image.id);
+  return ids;
+}
+
 function asString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+function coerceImages(raw: unknown): KnowHowImage[] {
+  if (!Array.isArray(raw)) return [];
+  const images: KnowHowImage[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as Record<string, unknown>;
+    const id = asString(obj.id);
+    if (!id) continue;
+    images.push({ id, name: asString(obj.name), caption: asString(obj.caption) });
+  }
+  return normalizeImages(images);
 }
 
 /** 外部から来た JSON を KnowHow に正規化する。必須項目が欠けていれば null */
@@ -106,6 +138,7 @@ export function coerceEntry(raw: unknown): KnowHow | null {
     cause: asString(obj.cause),
     solution: asString(obj.solution),
     notes: asString(obj.notes),
+    images: coerceImages(obj.images),
     favorite: obj.favorite === true,
     createdAt: asString(obj.createdAt, now),
     updatedAt: asString(obj.updatedAt, now),
@@ -137,27 +170,50 @@ export function saveEntries(storage: StorageLike, entries: readonly KnowHow[]): 
   }
 }
 
-export function exportJson(entries: readonly KnowHow[]): string {
-  return JSON.stringify({ app: 'casting-mold-knowhow', version: 1, entries }, null, 2);
+/** 画像 id → data URL（base64）の対応表。エクスポート／インポートで画像本体を運ぶ */
+export type ImageDataMap = Record<string, string>;
+
+export interface ImportResult {
+  entries: KnowHow[];
+  imageData: ImageDataMap;
+}
+
+export function exportJson(entries: readonly KnowHow[], imageData: ImageDataMap = {}): string {
+  return JSON.stringify({ app: 'casting-mold-knowhow', version: 2, entries, imageData }, null, 2);
 }
 
 /** エクスポート形式または KnowHow の配列を読み込む。壊れていれば例外 */
-export function importJson(text: string): KnowHow[] {
+export function importJson(text: string): ImportResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     throw new Error('JSON として読み込めませんでした。');
   }
-  const list = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { entries?: unknown }).entries)
-      ? ((parsed as { entries: unknown[] }).entries)
-      : null;
+  let list: unknown[] | null = null;
+  let imageData: ImageDataMap = {};
+  if (Array.isArray(parsed)) {
+    list = parsed;
+  } else if (parsed && typeof parsed === 'object') {
+    const obj = parsed as { entries?: unknown; imageData?: unknown };
+    if (Array.isArray(obj.entries)) list = obj.entries;
+    if (obj.imageData && typeof obj.imageData === 'object') {
+      for (const [id, value] of Object.entries(obj.imageData as Record<string, unknown>)) {
+        if (typeof value === 'string' && value.startsWith('data:image/')) imageData[id] = value;
+      }
+    }
+  }
   if (!list) throw new Error('ノウハウの配列が見つかりませんでした。');
   const entries = list.map(coerceEntry).filter((e): e is KnowHow => e !== null);
   if (entries.length === 0) throw new Error('有効なノウハウが1件もありませんでした。');
-  return entries;
+  // 画像本体が無い参照は落としておく（表示できないため）
+  const cleaned = entries.map((entry) => ({
+    ...entry,
+    images: entry.images.filter((image) => image.id in imageData),
+  }));
+  const referenced = referencedImageIds(cleaned);
+  imageData = Object.fromEntries(Object.entries(imageData).filter(([id]) => referenced.has(id)));
+  return { entries: cleaned, imageData };
 }
 
 /** インポートしたデータを既存データに統合する。同じ id は上書き、新規は末尾に追加 */
