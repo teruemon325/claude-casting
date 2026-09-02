@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SEED_ENTRIES } from './data/seed';
+import { seedImageBlob } from './data/seedImages';
 import { DEFAULT_FILTER, filterEntries, type Filter } from './search';
 import {
+  applySeedImagesOnce,
   createEntry,
   deleteEntry,
   exportJson,
@@ -30,6 +32,18 @@ function pickInput(entry: KnowHow): KnowHowInput {
   return { title, category, tags, summary, problem, cause, solution, notes, images };
 }
 
+/** 初期データの解説図のうち、ストアにまだ無いものを投入する */
+async function ensureSeedImages(store: ImageStore, entries: readonly KnowHow[]): Promise<void> {
+  const existing = new Set(await store.keys());
+  const tasks: Promise<void>[] = [];
+  for (const id of referencedImageIds(entries)) {
+    if (existing.has(id)) continue;
+    const blob = seedImageBlob(id);
+    if (blob) tasks.push(store.put(id, blob));
+  }
+  await Promise.all(tasks);
+}
+
 /** どのノウハウからも参照されなくなった画像をストアから消す */
 async function pruneOrphanImages(store: ImageStore, entries: readonly KnowHow[]): Promise<void> {
   const referenced = referencedImageIds(entries);
@@ -39,7 +53,9 @@ async function pruneOrphanImages(store: ImageStore, entries: readonly KnowHow[])
 
 export default function App() {
   const imageStore = useMemo(() => createImageStore(), []);
-  const [entries, setEntries] = useState<KnowHow[]>(() => loadEntries(window.localStorage, SEED_ENTRIES));
+  const [entries, setEntries] = useState<KnowHow[]>(() =>
+    applySeedImagesOnce(window.localStorage, loadEntries(window.localStorage, SEED_ENTRIES), SEED_ENTRIES),
+  );
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(null);
@@ -52,9 +68,11 @@ export default function App() {
     saveEntries(window.localStorage, entries);
   }, [entries]);
 
-  // 起動時に一度だけ、参照されていない画像を掃除する
+  // 起動時に一度だけ、初期データの解説図を投入し、参照されていない画像を掃除する
   useEffect(() => {
-    void pruneOrphanImages(imageStore, entries).catch(() => undefined);
+    void ensureSeedImages(imageStore, entries)
+      .then(() => pruneOrphanImages(imageStore, entries))
+      .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageStore]);
 
@@ -149,7 +167,10 @@ export default function App() {
     setEntries([...SEED_ENTRIES]);
     setFilter(DEFAULT_FILTER);
     setSelectedId(null);
-    await imageStore.clear().catch(() => undefined);
+    await imageStore
+      .clear()
+      .then(() => ensureSeedImages(imageStore, SEED_ENTRIES))
+      .catch(() => undefined);
     setToast('初期データに戻しました。');
   };
 

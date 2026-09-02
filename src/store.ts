@@ -222,3 +222,33 @@ export function mergeEntries(existing: readonly KnowHow[], incoming: readonly Kn
   for (const entry of incoming) byId.set(entry.id, entry);
   return [...byId.values()];
 }
+
+export const SEED_IMAGES_FLAG_KEY = 'casting-mold-knowhow:seed-images:v1';
+
+/**
+ * 旧バージョンで保存された初期データには画像が付いていない。
+ * 初期データ由来（id が一致）で画像が空のノウハウに、初期データの画像を一度だけ補う。
+ */
+export function addMissingSeedImages(entries: readonly KnowHow[], seed: readonly KnowHow[]): KnowHow[] {
+  const seedById = new Map(seed.map((e) => [e.id, e] as const));
+  return entries.map((entry) => {
+    const original = seedById.get(entry.id);
+    if (!original || original.images.length === 0 || entry.images.length > 0) return entry;
+    return { ...entry, images: original.images.map((img) => ({ ...img })) };
+  });
+}
+
+export function applySeedImagesOnce(storage: StorageLike, entries: readonly KnowHow[], seed: readonly KnowHow[]): KnowHow[] {
+  try {
+    if (storage.getItem(SEED_IMAGES_FLAG_KEY)) return [...entries];
+  } catch {
+    return [...entries];
+  }
+  const next = addMissingSeedImages(entries, seed);
+  try {
+    storage.setItem(SEED_IMAGES_FLAG_KEY, new Date().toISOString());
+  } catch {
+    // 保存できなくても動作は続ける
+  }
+  return next;
+}
